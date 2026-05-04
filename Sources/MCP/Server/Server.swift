@@ -253,7 +253,8 @@ public actor Server {
         _ type: M.Type,
         handler: @escaping @Sendable (M.Parameters) async throws -> M.Result
     ) -> Self {
-        methodHandlers[M.name] = TypedRequestHandler { (request: Request<M>) -> Response<M> in
+        let methodName = M.name
+        methodHandlers[methodName] = TypedRequestHandler { (request: Request<M>) -> Response<M> in
             let result = try await handler(request.params)
             return Response(id: request.id, result: result)
         }

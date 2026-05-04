@@ -343,7 +343,7 @@ public actor Client {
     /// A batch of requests.
     ///
     /// Objects of this type are passed as an argument to the closure
-    /// of the ``Client/withBatch(_:)`` method.
+    /// of the ``Client/withBatch(body:)`` method.
     public actor Batch {
         unowned let client: Client
         var requests: [AnyRequest] = []
@@ -390,23 +390,22 @@ public actor Client {
     /// returns a `Task` handle representing the asynchronous operation
     /// for that specific request's result.
     ///
-    /// It's recommended to collect these `Task` handles into an array
-    /// within the `body` closure`. After the `withBatch` method returns
-    /// (meaning the batch request has been sent), you can then process
-    /// the results by awaiting each `Task` in the collected array.
+    /// It's recommended to return these `Task` handles from the `body` closure.
+    /// After the `withBatch` method returns (meaning the batch request has been sent),
+    /// you can then process the results by awaiting each `Task`.
     ///
     /// Example 1: Batching multiple tool calls and collecting typed tasks:
     /// ```swift
-    /// // Array to hold the task handles for each tool call
-    /// var toolTasks: [Task<CallTool.Result, Error>] = []
-    /// try await client.withBatch { batch in
+    /// let toolTasks = try await client.withBatch { batch in
+    ///     var tasks: [Task<CallTool.Result, Error>] = []
     ///     for i in 0..<10 {
-    ///         toolTasks.append(
+    ///         tasks.append(
     ///             try await batch.addRequest(
     ///                 CallTool.request(.init(name: "square", arguments: ["n": i]))
     ///             )
     ///         )
     ///     }
+    ///     return tasks
     /// }
     ///
     /// // Process results after the batch is sent
@@ -423,26 +422,19 @@ public actor Client {
     ///
     /// Example 2: Batching different request types and awaiting individual tasks:
     /// ```swift
-    /// // Declare optional task variables beforehand
-    /// var pingTask: Task<Ping.Result, Error>?
-    /// var promptTask: Task<GetPrompt.Result, Error>?
-    ///
-    /// try await client.withBatch { batch in
-    ///     // Assign the tasks within the batch closure
-    ///     pingTask = try await batch.addRequest(Ping.request())
-    ///     promptTask = try await batch.addRequest(GetPrompt.request(.init(name: "greeting")))
+    /// let (pingTask, promptTask) = try await client.withBatch { batch in
+    ///     return (
+    ///         try await batch.addRequest(Ping.request()),
+    ///         try await batch.addRequest(GetPrompt.request(.init(name: "greeting")))
+    ///     )
     /// }
     ///
     /// // Await the results after the batch is sent
     /// do {
-    ///     if let pingTask = pingTask {
-    ///         try await pingTask.value // Await ping result (throws if ping failed)
-    ///         print("Ping successful")
-    ///     }
-    ///     if let promptTask = promptTask {
-    ///         let promptResult = try await promptTask.value // Await prompt result
-    ///         print("Prompt description: \(promptResult.description ?? "None")")
-    ///     }
+    ///     try await pingTask.value // Await ping result (throws if ping failed)
+    ///     print("Ping successful")
+    ///     let promptResult = try await promptTask.value // Await prompt result
+    ///     print("Prompt description: \(promptResult.description ?? "None")")
     /// } catch {
     ///     print("Error processing batch results: \(error)")
     /// }
@@ -450,9 +442,10 @@ public actor Client {
     ///
     /// - Parameter body: An asynchronous closure that takes a `Batch` object as input.
     ///                   Use this object to add requests to the batch.
+    /// - Returns: The value returned by the `body` closure.
     /// - Throws: `MCPError.internalError` if the client is not connected.
     ///           Can also rethrow errors from the `body` closure or from sending the batch request.
-    public func withBatch(body: @escaping (Batch) async throws -> Void) async throws {
+    public func withBatch<T: Sendable>(body: @Sendable (Batch) async throws -> T) async throws -> T {
         guard let connection = connection else {
             throw MCPError.internalError("Client connection not initialized")
         }
@@ -461,7 +454,7 @@ public actor Client {
         let batch = Batch(client: self)
 
         // Populate the batch actor by calling the user's closure.
-        try await body(batch)
+        let result = try await body(batch)
 
         // Get the collected requests from the batch actor
         let requests = await batch.requests
@@ -469,7 +462,7 @@ public actor Client {
         // Check if there are any requests to send
         guard !requests.isEmpty else {
             await logger?.info("Batch requested but no requests were added.")
-            return  // Nothing to send
+            return result  // Nothing to send
         }
 
         await logger?.debug(
@@ -480,6 +473,7 @@ public actor Client {
         try await connection.send(data)
 
         // Responses will be handled asynchronously by the message loop and handleBatchResponse/handleResponse.
+        return result
     }
 
     // MARK: - Lifecycle
