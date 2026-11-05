@@ -467,6 +467,71 @@ import Testing
                 await transport.disconnect()
             }
 
+            @Test(
+                "SSE GET keeps caller headers and its own Accept",
+                .httpClientTransportSetup)
+            func testSSEGetKeepsCallerAuthorization() async throws {
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.protocolClasses = [MockURLProtocol.self]
+
+                let transport = HTTPClientTransport(
+                    endpoint: testEndpoint,
+                    headers: [
+                        "Authorization": "Bearer session-token",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    ],
+                    configuration: configuration,
+                    streaming: true,
+                    sseInitializationTimeout: 1,
+                    logger: nil
+                )
+
+                let eventString = "id: event1\ndata: {\"key\":\"value\"}\n\n"
+                let sseEventData = eventString.data(using: .utf8)!
+
+                await MockURLProtocol.requestHandlerStorage.setHandler {
+                    [testEndpoint] (request: URLRequest) in
+                    let response = HTTPURLResponse(
+                        url: testEndpoint, statusCode: 200, httpVersion: "HTTP/1.1",
+                        headerFields: [
+                            "Content-Type": "text/plain",
+                            "Mcp-Session-Id": "test-session-123",
+                        ])!
+                    return (response, Data())
+                }
+
+                try await transport.connect()
+                try await transport.send(Data())
+
+                await MockURLProtocol.requestHandlerStorage.setHandler {
+                    [testEndpoint, sseEventData] (request: URLRequest) in
+                    #expect(request.httpMethod == "GET")
+                    #expect(
+                        request.value(forHTTPHeaderField: "Authorization")
+                            == "Bearer session-token")
+                    #expect(request.value(forHTTPHeaderField: "Accept") == "text/event-stream")
+                    #expect(request.value(forHTTPHeaderField: "Content-Type") == nil)
+                    #expect(
+                        request.value(forHTTPHeaderField: "Mcp-Session-Id") == "test-session-123")
+
+                    let response = HTTPURLResponse(
+                        url: testEndpoint, statusCode: 200, httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "text/event-stream"])!
+                    return (response, sseEventData)
+                }
+
+                try await Task.sleep(for: .milliseconds(100))
+
+                let stream = await transport.receive()
+                var iterator = stream.makeAsyncIterator()
+                let expectedData = #"{"key":"value"}"#.data(using: .utf8)!
+                let receivedData = try await iterator.next()
+                #expect(receivedData == expectedData)
+
+                await transport.disconnect()
+            }
+
             @Test("Receive Server-Sent Event (SSE) (CR-NL)", .httpClientTransportSetup)
             func testReceiveSSE_CRNL() async throws {
                 let configuration = URLSessionConfiguration.ephemeral

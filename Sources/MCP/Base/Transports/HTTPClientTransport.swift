@@ -488,8 +488,14 @@ public actor HTTPClientTransport: Transport {
 
             var request = URLRequest(url: endpoint)
             request.httpMethod = "GET"
-            request.addValue("text/event-stream", forHTTPHeaderField: "Accept")
-            request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            for (field, value) in headers {
+                if field.caseInsensitiveCompare("Content-Type") == .orderedSame {
+                    continue
+                }
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
             // Add session ID if available
             if let sessionID = sessionID {
